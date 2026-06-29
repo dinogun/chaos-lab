@@ -1,9 +1,9 @@
 package ai.causa.libertyperf.metrics;
 
+import ai.causa.libertyperf.service.ResponsePaddingService;
 import ai.causa.libertyperf.service.TransactionService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.metrics.Gauge;
 import org.eclipse.microprofile.metrics.MetricRegistry;
 import org.eclipse.microprofile.metrics.annotation.RegistryScope;
 
@@ -14,11 +14,13 @@ import jakarta.annotation.PostConstruct;
  *
  * <p>Metrics exposed:
  * <ul>
- *   <li>{@code liberty_perf_heap_used_bytes}    — current JVM heap usage</li>
- *   <li>{@code liberty_perf_heap_max_bytes}     — configured JVM max heap</li>
- *   <li>{@code liberty_perf_heap_used_pct}      — heap utilisation (0–1)</li>
- *   <li>{@code liberty_perf_leak_cache_entries} — number of leaked objects in cache</li>
- *   <li>{@code liberty_perf_leak_cache_bytes}   — estimated bytes held by leak cache</li>
+ *   <li>{@code liberty_perf_heap_used_bytes}         — current JVM heap usage</li>
+ *   <li>{@code liberty_perf_heap_max_bytes}          — configured JVM max heap</li>
+ *   <li>{@code liberty_perf_heap_used_pct}           — heap utilisation (0–1)</li>
+ *   <li>{@code liberty_perf_leak_cache_entries}      — background heap-leak cache entries</li>
+ *   <li>{@code liberty_perf_leak_cache_bytes}        — bytes held by background leak cache</li>
+ *   <li>{@code liberty_perf_http_padding_total_bytes} — cumulative bytes padded into HTTP responses</li>
+ *   <li>{@code liberty_perf_http_padding_enabled}    — 1.0 if HTTP large-response chaos is active</li>
  * </ul>
  */
 @ApplicationScoped
@@ -30,6 +32,9 @@ public class CustomMetrics {
 
     @Inject
     TransactionService transactionService;
+
+    @Inject
+    ResponsePaddingService paddingService;
 
     @PostConstruct
     void register() {
@@ -52,5 +57,12 @@ public class CustomMetrics {
 
         registry.gauge("liberty_perf_leak_cache_bytes",
                 () -> (double) transactionService.getLeakCacheBytes());
+
+        // HTTP large-response chaos gauges
+        registry.gauge("liberty_perf_http_padding_total_bytes",
+                () -> (double) paddingService.getTotalPaddingBytes());
+
+        registry.gauge("liberty_perf_http_padding_enabled",
+                () -> paddingService.isEnabled() ? 1.0 : 0.0);
     }
 }

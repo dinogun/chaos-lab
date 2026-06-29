@@ -35,18 +35,67 @@ data:
   DB_AGED_TIMEOUT_S: "3600"
 
   # ── HTTP keep-alive ──────────────────────────────────────
+  # persistTimeout raised to 60s (from 30s) — connections linger longer,
+  # holding response buffers in heap for the full window.
   HTTP_MAX_KEEPALIVE_REQUESTS: "200"
-  HTTP_PERSIST_TIMEOUT_S: "30"
+  HTTP_PERSIST_TIMEOUT_S: "60"
+  # NIO write buffer per connection (bytes). Default Liberty is 32768.
+  # 65536 doubles per-connection heap cost; raise further to amplify pressure.
+  HTTP_RESPONSE_BUFFER_SIZE: "65536"
 
   # ── Chaos knobs (set to "true" to activate) ──────────────
+  # ── Primary scenario: HTTP large-response + keep-alive ───
+  # Each response padded with CHAOS_HTTP_LARGE_RESPONSE_KB KB of Base64 data.
+  # Combined with HTTP_PERSIST_TIMEOUT_S=60, live heap ≈
+  #   CONCURRENT_USERS × CHAOS_HTTP_LARGE_RESPONSE_KB KB × 2.33 (Base64 overhead)
+  # At 50 users × 256 KB × 2.33 ≈ ~30 MB of live heap per response cycle.
+  CHAOS_HTTP_LARGE_RESPONSE_ENABLED: "true"
+  CHAOS_HTTP_LARGE_RESPONSE_KB: "256"
+
+  # ── Secondary scenario: Connection leak ──────────────────
   # Connection leak — connections are never returned to pool
   CHAOS_DB_LEAK_ENABLED: "false"
   # Slow query simulation (ms, 0=disabled)
   CHAOS_DB_SLOW_QUERY_MS: "0"
-  # Memory leak via unbounded response cache
+  # ── Tertiary scenario: background heap leak ───────────────
+  # Memory leak via unbounded response cache (independent of HTTP traffic)
   CHAOS_MEMORY_CACHE_ENABLED: "false"
   # Objects (64KB each) cached per transaction when cache is on
   CHAOS_MEMORY_OBJECTS_PER_TX: "1"
+---
+# ============================================================
+# ConfigMap — jvm.options for OpenJ9 GC / JIT / dump logging
+# Mounted into /config/jvm.options inside the Liberty container
+# so Liberty reads these flags on every startup.
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: liberty-perf-jvm-options
+  namespace: chaos-test
+  labels:
+    app: liberty-perf
+data:
+  jvm.options: |
+    # ── Verbose GC ──────────────────────────────────────────────────────────
+    # OpenJ9 XML GC log: 4 rotating files, wraps every 20 000 GC cycles.
+    # Produces verbosegc.001.log … verbosegc.004.log under /logs.
+    -Xverbosegclog:/logs/verbosegc.%seq.log,4,20000
+
+    # ── JIT compilation trace ────────────────────────────────────────────────
+    # Emits one line per method at compile / recompile time, capped at 50 MB.
+    -Xjit:verbose={compileStart|compileEnd|recompile|methodRecompilationFailed},vlog=/logs/jit.log,limit=52428800
+
+    # ── Class-loading ────────────────────────────────────────────────────────
+    # Prints one line to stdout for every class dynamically loaded/unloaded.
+    -verbose:dynload
+
+    # ── Thread dump on SIGQUIT / crash / abort ───────────────────────────────
+    # Trigger: oc exec -n chaos-test <pod> -- kill -3 1
+    -Xdump:java:events=user+gpf+abort,file=/dumps/javacore.%Y%m%d.%H%M%S.%pid.txt
+
+    # ── Heap dump on OutOfMemoryError ────────────────────────────────────────
+    -Xdump:heap:events=systhrow+throw,filter=java/lang/OutOfMemoryError,file=/dumps/heapdump.%Y%m%d.%H%M%S.%pid.phd
 ---
 # ============================================================
 # Deployment — main application (3 replicas)
@@ -106,6 +155,7 @@ spec:
               value: >-
                 -XX:+UseContainerSupport
                 -XX:MaxRAMPercentage=75
+                -Xdump:heap:events=systhrow+throw,filter=java/lang/OutOfMemoryError,file=/dumps/heapdump.%Y%m%d.%H%M%S.%pid.phd
                 -Dfile.encoding=UTF-8
             - name: POD_NAME
               valueFrom:
@@ -158,11 +208,18 @@ spec:
               mountPath: /dumps
             - name: logs
               mountPath: /logs
+            - name: jvm-options
+              mountPath: /opt/wlp/usr/servers/defaultServer/jvm.options
+              subPath: jvm.options
+              readOnly: true
       volumes:
         - name: dumps
           emptyDir: {}
         - name: logs
           emptyDir: {}
+        - name: jvm-options
+          configMap:
+            name: liberty-perf-jvm-options
 ---
 # ============================================================
 # Service — ClusterIP for internal access + Prometheus scraping

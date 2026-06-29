@@ -3,6 +3,7 @@ package ai.causa.libertyperf.rest;
 import ai.causa.libertyperf.model.Account;
 import ai.causa.libertyperf.model.ApiResponse;
 import ai.causa.libertyperf.model.Transaction;
+import ai.causa.libertyperf.service.ResponsePaddingService;
 import ai.causa.libertyperf.service.TransactionService;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
@@ -36,6 +37,9 @@ public class AccountResource {
     @Inject
     TransactionService transactionService;
 
+    @Inject
+    ResponsePaddingService paddingService;
+
     // -------------------------------------------------------------------------
     // Account endpoints
     // -------------------------------------------------------------------------
@@ -64,8 +68,10 @@ public class AccountResource {
         }
         Account created = transactionService.createAccount(
                 request.getOwnerName(), type, request.getInitialBalance());
+        ApiResponse<Account> resp = ApiResponse.ok(created, correlationId, System.currentTimeMillis() - start);
+        paddingService.pad(resp);
         return Response.status(Response.Status.CREATED)
-                .entity(ApiResponse.ok(created, correlationId, System.currentTimeMillis() - start))
+                .entity(resp)
                 .build();
     }
 
@@ -79,9 +85,9 @@ public class AccountResource {
 
         List<Account> accounts = transactionService.listAccounts();
 
-        return Response.ok(
-                ApiResponse.ok(accounts, correlationId, System.currentTimeMillis() - start)
-        ).build();
+        ApiResponse<List<Account>> resp = ApiResponse.ok(accounts, correlationId, System.currentTimeMillis() - start);
+        paddingService.pad(resp);
+        return Response.ok(resp).build();
     }
 
     @GET
@@ -104,9 +110,9 @@ public class AccountResource {
                     .build();
         }
 
-        return Response.ok(
-                ApiResponse.ok(account.get(), correlationId, System.currentTimeMillis() - start)
-        ).build();
+        ApiResponse<Account> resp = ApiResponse.ok(account.get(), correlationId, System.currentTimeMillis() - start);
+        paddingService.pad(resp);
+        return Response.ok(resp).build();
     }
 
     // -------------------------------------------------------------------------
@@ -127,9 +133,9 @@ public class AccountResource {
 
         List<Transaction> txList = transactionService.getTransactionHistory(accountId, limit);
 
-        return Response.ok(
-                ApiResponse.ok(txList, correlationId, System.currentTimeMillis() - start)
-        ).build();
+        ApiResponse<List<Transaction>> resp = ApiResponse.ok(txList, correlationId, System.currentTimeMillis() - start);
+        paddingService.pad(resp);
+        return Response.ok(resp).build();
     }
 
     @POST
@@ -162,8 +168,10 @@ public class AccountResource {
                     request.getCurrency() != null ? request.getCurrency() : "USD",
                     request.getDescription());
 
+            ApiResponse<Transaction> resp = ApiResponse.ok(tx, correlationId, System.currentTimeMillis() - start);
+            paddingService.pad(resp);
             return Response.status(Response.Status.CREATED)
-                    .entity(ApiResponse.ok(tx, correlationId, System.currentTimeMillis() - start))
+                    .entity(resp)
                     .build();
 
         } catch (IllegalArgumentException e) {

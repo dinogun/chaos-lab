@@ -19,10 +19,17 @@ import java.util.logging.Logger;
 /**
  * Business logic for account and transaction operations.
  *
- * <p><strong>Memory chaos knob:</strong><br>
- * When {@code chaos.memory.response.cache.enabled=true} each transaction response is cached in a
- * static map that is never evicted, growing heap indefinitely. Combined with high concurrent load
- * this is an effective memory pressure generator.
+ * <p><strong>Primary chaos scenario — HTTP large-response + keep-alive:</strong><br>
+ * See {@link ai.causa.libertyperf.service.ResponsePaddingService}. Activated via
+ * {@code CHAOS_HTTP_LARGE_RESPONSE_ENABLED=true}. This reproduces the RCA scenario
+ * where Liberty HTTP misconfiguration (large responses held on keep-alive connections)
+ * causes heap pressure proportional to concurrent connection count.
+ *
+ * <p><strong>Secondary chaos knob — background heap leak:</strong><br>
+ * When {@code chaos.memory.response.cache.enabled=true} each transaction response is
+ * additionally cached in a static map that is never evicted, growing heap indefinitely
+ * regardless of HTTP traffic. Use this to stack on top of the HTTP scenario or to
+ * accelerate OOM in isolation.
  */
 @ApplicationScoped
 public class TransactionService {

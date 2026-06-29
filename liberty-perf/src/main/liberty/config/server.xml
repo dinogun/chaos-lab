@@ -53,8 +53,18 @@
     <variable name="DB_AGED_TIMEOUT_S"              defaultValue="3600"/>
 
     <!-- HTTP keep-alive -->
+    <!-- HTTP_PERSIST_TIMEOUT_S controls how long a keep-alive connection stays
+         open after the last response. Increasing this is the primary chaos knob
+         for HTTP-driven memory pressure: each live connection holds its last
+         response buffer in heap for up to this many seconds. Combined with
+         CHAOS_HTTP_LARGE_RESPONSE_ENABLED=true the effect is multiplicative. -->
     <variable name="HTTP_MAX_KEEPALIVE_REQUESTS"    defaultValue="200"/>
-    <variable name="HTTP_PERSIST_TIMEOUT_S"         defaultValue="30"/>
+    <variable name="HTTP_PERSIST_TIMEOUT_S"         defaultValue="60"/>
+
+    <!-- HTTP response/request buffer size per connection (bytes).
+         Raising this beyond 32768 means Liberty pre-allocates larger NIO buffers
+         per socket, amplifying per-connection heap cost at scale. -->
+    <variable name="HTTP_RESPONSE_BUFFER_SIZE"      defaultValue="65536"/>
 
     <!-- ============================================================
          HTTP / HTTPS endpoints — listens on ALL interfaces (host="*")
@@ -66,9 +76,13 @@
                   httpsPort="${default.https.port}">
         <tcpOptions soReuseAddr="true"/>
         <!-- keepAliveEnabled=true (default); maxKeepAliveRequests controls
-             how many requests share a connection before it is closed -->
+             how many requests share a connection before it is closed.
+             responseBufferSize sets the NIO write buffer per connection;
+             raising it beyond the default 32 KB amplifies per-connection heap
+             cost, which compounds with the large-response chaos knob. -->
         <httpOptions maxKeepAliveRequests="${HTTP_MAX_KEEPALIVE_REQUESTS}"
-                     persistTimeout="${HTTP_PERSIST_TIMEOUT_S}"/>
+                     persistTimeout="${HTTP_PERSIST_TIMEOUT_S}"
+                     responseBufferSize="${HTTP_RESPONSE_BUFFER_SIZE}"/>
     </httpEndpoint>
 
     <!-- ============================================================

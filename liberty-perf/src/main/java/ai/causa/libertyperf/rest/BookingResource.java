@@ -3,6 +3,7 @@ package ai.causa.libertyperf.rest;
 import ai.causa.libertyperf.model.ApiResponse;
 import ai.causa.libertyperf.model.Booking;
 import ai.causa.libertyperf.service.BookingService;
+import ai.causa.libertyperf.service.ResponsePaddingService;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -29,6 +30,9 @@ public class BookingResource {
 
     @Inject
     BookingService bookingService;
+
+    @Inject
+    ResponsePaddingService paddingService;
 
     // -------------------------------------------------------------------------
     // Booking endpoints
@@ -59,8 +63,10 @@ public class BookingResource {
                     request.getOrigin(),
                     request.getDestination());
 
+            ApiResponse<Booking> resp = ApiResponse.ok(booking, correlationId, System.currentTimeMillis() - start);
+            paddingService.pad(resp);
             return Response.status(Response.Status.CREATED)
-                    .entity(ApiResponse.ok(booking, correlationId, System.currentTimeMillis() - start))
+                    .entity(resp)
                     .build();
 
         } catch (Exception e) {
@@ -87,9 +93,9 @@ public class BookingResource {
                     .build();
         }
 
-        return Response.ok(
-                ApiResponse.ok(booking.get(), correlationId, System.currentTimeMillis() - start)
-        ).build();
+        ApiResponse<Booking> resp = ApiResponse.ok(booking.get(), correlationId, System.currentTimeMillis() - start);
+        paddingService.pad(resp);
+        return Response.ok(resp).build();
     }
 
     @GET
@@ -107,9 +113,9 @@ public class BookingResource {
 
         List<Booking> bookings = bookingService.listBookings(passengerId);
 
-        return Response.ok(
-                ApiResponse.ok(bookings, correlationId, System.currentTimeMillis() - start)
-        ).build();
+        ApiResponse<List<Booking>> resp = ApiResponse.ok(bookings, correlationId, System.currentTimeMillis() - start);
+        paddingService.pad(resp);
+        return Response.ok(resp).build();
     }
 
     // -------------------------------------------------------------------------
