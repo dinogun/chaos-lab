@@ -132,13 +132,29 @@
                     contextRoot="/"/>
 
     <!-- ============================================================
-         Logging — structured JSON for Kubernetes log aggregation
+         JVM logging flags — see jvm.options in this directory.
+         Liberty reads jvm.options before launching the JVM process.
+         The flags configured there are:
+           -Xverbosegclog    — OpenJ9 verbose GC XML, 4 rotating files
+           -Xjit:verbose     — JIT compile/recompile events, 50 MB cap
+           -verbose:dynload  — class-loading events to stdout
+           -Xdump:java       — thread dump on SIGQUIT / crash / abort
+           -Xdump:heap       — heap dump on OutOfMemoryError
+         ============================================================ -->
+
+    <!-- ============================================================
+         Logging — structured JSON for Kubernetes log aggregation.
+         traceSpecification raised to capture JVM-adjacent subsystems:
+           WAS.j2c     — JDBC connection pool events (acquire/release/timeout)
+           Threading   — Liberty executor / thread lifecycle
+           healthcenter — IBM Health Center JVM sampling agent events
+         All other components remain at INFO to avoid log flooding.
          ============================================================ -->
     <logging
         messageFormat="json"
         consoleFormat="json"
         consoleLogLevel="INFO"
-        traceSpecification="*=info"
+        traceSpecification="*=info:WAS.j2c*=fine:com.ibm.ws.threading*=fine:com.ibm.ws.jca*=fine:com.ibm.ws.kernel.launch*=fine"
         maxFileSize="100"
         maxFiles="5"
         isoDateFormat="true"
