@@ -1,0 +1,111 @@
+---
+# ============================================================
+# Load Generator — Kubernetes Job
+# Deploys alongside the main application to drive HTTP load.
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: load-gen-config
+  namespace: chaos-test
+  labels:
+    app: liberty-perf-load-gen
+data:
+  # Target service (must match Service name in deploy.yaml)
+  TARGET_HOST: "liberty-perf-svc"
+  TARGET_PORT: "9080"
+
+  # Load profile
+  CONCURRENT_USERS: "50"
+  DURATION_SECONDS: "600"
+  REQUEST_DELAY_MS: "50"
+
+  # Mix: percentage of requests that are booking (airline) vs transaction (banking)
+  BOOKING_RATIO: "50"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: liberty-perf-load-gen
+  namespace: chaos-test
+  labels:
+    app: liberty-perf-load-gen
+spec:
+  # Do not retry on failure — a failed run should be investigated
+  backoffLimit: 0
+  # Clean up 24h after completion
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: liberty-perf-load-gen
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # ── Init container ────────────────────────────────────────────────────────
+      # The WAR stores compiled classes under WEB-INF/classes/.
+      # Java cannot load classes directly from a WAR path, so this init
+      # container extracts that directory into a shared emptyDir volume.
+      # The image is a JRE (no javac/jar tool), so a pre-compiled Extract.class
+      # is embedded as a single-line base64 string and decoded at runtime.
+      # Extract.class uses only java.util.zip + java.nio from java.base.
+      initContainers:
+        - name: extract-classes
+          image: quay.io/causa-ai-hub/liberty-perf:1.0.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              WAR=/opt/wlp/usr/servers/defaultServer/apps/liberty-perf.war
+              OUT=/shared/classes
+              mkdir -p /tmp/extractor "$OUT"
+              echo "yv66vgAAAEEAhwoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCAAIAQAQV0VCLUlORi9jbGFzc2VzLwcACgEAHGphdmEvdXRpbC96aXAvWmlwSW5wdXRTdHJlYW0HAAwBABdqYXZhL2lvL0ZpbGVJbnB1dFN0cmVhbQoACwAODAAFAA8BABUoTGphdmEvbGFuZy9TdHJpbmc7KVYKAAkAEQwABQASAQAYKExqYXZhL2lvL0lucHV0U3RyZWFtOylWCgAJABQMABUAFgEADGdldE5leHRFbnRyeQEAGigpTGphdmEvdXRpbC96aXAvWmlwRW50cnk7CgAYABkHABoMABsAHAEAFmphdmEvdXRpbC96aXAvWmlwRW50cnkBAAdnZXROYW1lAQAUKClMamF2YS9sYW5nL1N0cmluZzsKAB4AHwcAIAwAIQAiAQAQamF2YS9sYW5nL1N0cmluZwEACnN0YXJ0c1dpdGgBABUoTGphdmEvbGFuZy9TdHJpbmc7KVoKABgAJAwAJQAmAQALaXNEaXJlY3RvcnkBAAMoKVoKAB4AKAwAKQAqAQAGbGVuZ3RoAQADKClJCgAeACwMAC0ALgEACXN1YnN0cmluZwEAFShJKUxqYXZhL2xhbmcvU3RyaW5nOwoAMAAxBwAyDAAzADQBABNqYXZhL25pby9maWxlL1BhdGhzAQADZ2V0AQA7KExqYXZhL2xhbmcvU3RyaW5nO1tMamF2YS9sYW5nL1N0cmluZzspTGphdmEvbmlvL2ZpbGUvUGF0aDsLADYANwcAOAwAOQA6AQASamF2YS9uaW8vZmlsZS9QYXRoAQAJZ2V0UGFyZW50AQAWKClMamF2YS9uaW8vZmlsZS9QYXRoOwcAPAEAJWphdmEvbmlvL2ZpbGUvYXR0cmlidXRlL0ZpbGVBdHRyaWJ1dGUKAD4APwcAQAwAQQBCAQATamF2YS9uaW8vZmlsZS9GaWxlcwEAEWNyZWF0ZURpcmVjdG9yaWVzAQBSKExqYXZhL25pby9maWxlL1BhdGg7W0xqYXZhL25pby9maWxlL2F0dHJpYnV0ZS9GaWxlQXR0cmlidXRlOylMamF2YS9uaW8vZmlsZS9QYXRoOwcARAEAGGphdmEvbmlvL2ZpbGUvQ29weU9wdGlvbgkARgBHBwBIDABJAEoBACBqYXZhL25pby9maWxlL1N0YW5kYXJkQ29weU9wdGlvbgEAEFJFUExBQ0VfRVhJU1RJTkcBACJMamF2YS9uaW8vZmlsZS9TdGFuZGFyZENvcHlPcHRpb247CgA+AEwMAE0ATgEABGNvcHkBAEcoTGphdmEvaW8vSW5wdXRTdHJlYW07TGphdmEvbmlvL2ZpbGUvUGF0aDtbTGphdmEvbmlvL2ZpbGUvQ29weU9wdGlvbjspSgoACQBQDABRAAYBAApjbG9zZUVudHJ5CgAJAFMMAFQABgEABWNsb3NlBwBWAQATamF2YS9sYW5nL1Rocm93YWJsZQoAVQBYDABZAFoBAA1hZGRTdXBwcmVzc2VkAQAYKExqYXZhL2xhbmcvVGhyb3dhYmxlOylWCQBcAF0HAF4MAF8AYAEAEGphdmEvbGFuZy9TeXN0ZW0BAANvdXQBABVMamF2YS9pby9QcmludFN0cmVhbTsSAAAAYgwAYwBkAQAXbWFrZUNvbmNhdFdpdGhDb25zdGFudHMBACYoTGphdmEvbGFuZy9TdHJpbmc7KUxqYXZhL2xhbmcvU3RyaW5nOwoAZgBnBwBoDABpAA8BABNqYXZhL2lvL1ByaW50U3RyZWFtAQAHcHJpbnRsbgcAawEAB0V4dHJhY3QBAARDb2RlAQAPTGluZU51bWJlclRhYmxlAQAEbWFpbgEAFihbTGphdmEvbGFuZy9TdHJpbmc7KVYBAA1TdGFja01hcFRhYmxlBwByAQATW0xqYXZhL2xhbmcvU3RyaW5nOwEACkV4Y2VwdGlvbnMHAHUBABNqYXZhL2xhbmcvRXhjZXB0aW9uAQAKU291cmNlRmlsZQEADEV4dHJhY3QuamF2YQEAEEJvb3RzdHJhcE1ldGhvZHMIAHoBAB5FeHRyYWN0ZWQgV0VCLUlORi9jbGFzc2VzIHRvIAEPBgB8CgB9AH4HAH8MAGMAgAEAJGphdmEvbGFuZy9pbnZva2UvU3RyaW5nQ29uY2F0RmFjdG9yeQEAmChMamF2YS9sYW5nL2ludm9rZS9NZXRob2RIYW5kbGVzJExvb2t1cDtMamF2YS9sYW5nL1N0cmluZztMamF2YS9sYW5nL2ludm9rZS9NZXRob2RUeXBlO0xqYXZhL2xhbmcvU3RyaW5nO1tMamF2YS9sYW5nL09iamVjdDspTGphdmEvbGFuZy9pbnZva2UvQ2FsbFNpdGU7AQAMSW5uZXJDbGFzc2VzBwCDAQAlamF2YS9sYW5nL2ludm9rZS9NZXRob2RIYW5kbGVzJExvb2t1cAcAhQEAHmphdmEvbGFuZy9pbnZva2UvTWV0aG9kSGFuZGxlcwEABkxvb2t1cAAhAGoAAgAAAAAAAgABAAUABgABAGwAAAAdAAEAAQAAAAUqtwABsQAAAAEAbQAAAAYAAQAAAAQACQBuAG8AAgBsAAABVwAGAAgAAACsKgMyTCoEMk0SB067AAlZuwALWSu3AA23ABA6BBkEtgATWToFxgBdGQW2ABcttgAdmQBJGQW2ACOaAEEZBbYAFy22ACe2ACs6BiwEvQAeWQMZBlO4AC86BxkHuQA1AQADvQA7uAA9VxkEGQcEvQBDWQOyAEVTuABLWBkEtgBPp/+eGQS2AFKnABk6BRkEtgBSpwAMOgYZBRkGtgBXGQW/sgBbLLoAYQAAtgBlsQACABwAgQCJAFUAiwCQAJMAVQACAG0AAAA+AA8AAAAGAAQABwAIAAgACwAJABwACwAnAAwAOwANAEkADgBYAA8AZwAQAHkAEgCBABQAiQAJAJ8AFQCrABYAcAAAAEUAB/8AHAAFBwBxBwAeBwAeBwAeBwAJAAD8AFwHABj6AAdHBwBV/wAJAAYHAHEHAB4HAB4HAB4HAAkHAFUAAQcAVQj5AAIAcwAAAAQAAQB0AAMAdgAAAAIAdwB4AAAACAABAHsAAQB5AIEAAAAKAAEAggCEAIYAGQ==" \
+                | base64 -d > /tmp/extractor/Extract.class
+              java -cp /tmp/extractor Extract "$WAR" "$OUT"
+              echo "Init complete. Classes extracted:"
+              ls "$OUT/ai/causa/libertyperf/load/"
+          volumeMounts:
+            - name: shared-classes
+              mountPath: /shared
+      containers:
+        - name: load-gen
+          # The load generator is packaged in the same image as the main app.
+          # Classes are pre-extracted by the init container into /shared/classes.
+          image: quay.io/causa-ai-hub/liberty-perf:1.0.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - java
+            - -cp
+            - /shared/classes
+            - ai.causa.libertyperf.load.LoadGenerator
+          envFrom:
+            - configMapRef:
+                name: load-gen-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: shared-classes
+              mountPath: /shared
+      volumes:
+        - name: shared-classes
+          emptyDir: {}

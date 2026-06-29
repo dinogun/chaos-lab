@@ -1,0 +1,67 @@
+---
+# ============================================================
+# ServiceMonitor — Prometheus Operator scrape configuration
+# Requires prometheus-operator CRDs (kube-prometheus-stack)
+# ============================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: liberty-perf-monitor
+  namespace: chaos-test
+  labels:
+    app: liberty-perf
+    # Selector label used by the Prometheus custom resource
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: liberty-perf
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+---
+# ============================================================
+# PrometheusRule — alerting rules
+# ============================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: liberty-perf-alerts
+  namespace: chaos-test
+  labels:
+    app: liberty-perf
+    release: prometheus
+spec:
+  groups:
+    - name: liberty-perf.memory
+      rules:
+        - alert: LibertyPerfHighHeapUsage
+          expr: liberty_perf_heap_used_pct > 0.80
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Liberty Perf heap usage > 80%"
+            description: "Pod {{ $labels.pod }} heap utilisation is {{ $value | humanizePercentage }}. Check chaos.memory.response.cache.enabled."
+
+        - alert: LibertyPerfHeapCritical
+          expr: liberty_perf_heap_used_pct > 0.90
+          for: 30s
+          labels:
+            severity: critical
+          annotations:
+            summary: "Liberty Perf heap usage CRITICAL (>90%)"
+            description: "Pod {{ $labels.pod }} is near OOM. Liveness probe will restart. Check CHAOS_MEMORY_CACHE_ENABLED."
+
+    - name: liberty-perf.connections
+      rules:
+        - alert: LibertyPerfReadinessFailing
+          expr: up{job="liberty-perf-svc"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Liberty Perf readiness probe failing"
+            description: "Pod {{ $labels.pod }} readiness probe is failing — possible DB connection pool exhaustion."

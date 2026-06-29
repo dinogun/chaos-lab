@@ -1,0 +1,235 @@
+---
+# ============================================================
+# Namespace
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos-test
+  labels:
+    app.kubernetes.io/part-of: chaos-lab
+---
+# ============================================================
+# ConfigMap — externalised application settings
+# Override values here without rebuilding the image.
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: liberty-perf-config
+  namespace: chaos-test
+  labels:
+    app: liberty-perf
+data:
+  # ── Thread pool ──────────────────────────────────────────
+  THREAD_POOL_CORE: "20"
+  THREAD_POOL_MAX: "200"
+
+  # ── DB connection pool ───────────────────────────────────
+  # Reduce DB_MAX_POOL_SIZE to trigger connection starvation
+  DB_MAX_POOL_SIZE: "20"
+  DB_MIN_POOL_SIZE: "2"
+  DB_CONNECTION_TIMEOUT_MS: "5000"
+  DB_MAX_IDLE_TIME_S: "60"
+  DB_REAP_TIME_S: "180"
+  DB_AGED_TIMEOUT_S: "3600"
+
+  # ── HTTP keep-alive ──────────────────────────────────────
+  HTTP_MAX_KEEPALIVE_REQUESTS: "200"
+  HTTP_PERSIST_TIMEOUT_S: "30"
+
+  # ── Chaos knobs (set to "true" to activate) ──────────────
+  # Connection leak — connections are never returned to pool
+  CHAOS_DB_LEAK_ENABLED: "false"
+  # Slow query simulation (ms, 0=disabled)
+  CHAOS_DB_SLOW_QUERY_MS: "0"
+  # Memory leak via unbounded response cache
+  CHAOS_MEMORY_CACHE_ENABLED: "false"
+  # Objects (64KB each) cached per transaction when cache is on
+  CHAOS_MEMORY_OBJECTS_PER_TX: "1"
+---
+# ============================================================
+# Deployment — main application (3 replicas)
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liberty-perf
+  namespace: chaos-test
+  labels:
+    app: liberty-perf
+    version: "1.0.0"
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "9080"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: liberty-perf
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: liberty-perf
+        version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "9080"
+    spec:
+      # Non-root container as required by security constraints
+      # runAsUser / fsGroup are intentionally omitted — OpenShift assigns
+      # a UID from the namespace's allowed range automatically.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: liberty-perf
+          image: quay.io/causa-ai-hub/liberty-perf:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 9080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: liberty-perf-config
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: >-
+                -XX:+UseContainerSupport
+                -XX:MaxRAMPercentage=75
+                -XX:+HeapDumpOnOutOfMemoryError
+                -XX:HeapDumpPath=/dumps/heapdump.hprof
+                -Dfile.encoding=UTF-8
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          # Startup probe — give Liberty up to 90s to start
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: 9080
+            failureThreshold: 18
+            periodSeconds: 5
+            timeoutSeconds: 3
+          # Liveness probe — restart if heap > 90%
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 9080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness probe — stop traffic if DB is unreachable
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: dumps
+              mountPath: /dumps
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: dumps
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+---
+# ============================================================
+# Service — ClusterIP for internal access + Prometheus scraping
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: liberty-perf-svc
+  namespace: chaos-test
+  labels:
+    app: liberty-perf
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "9080"
+spec:
+  selector:
+    app: liberty-perf
+  ports:
+    - name: http
+      port: 9080
+      targetPort: 9080
+      protocol: TCP
+  type: ClusterIP
+---
+# ============================================================
+# Route — external HTTP access (OpenShift)
+# ============================================================
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: liberty-perf
+  namespace: chaos-test
+  labels:
+    app: liberty-perf
+spec:
+  to:
+    kind: Service
+    name: liberty-perf-svc
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+---
+# ============================================================
+# HorizontalPodAutoscaler — scale based on CPU
+# ============================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: liberty-perf-hpa
+  namespace: chaos-test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: liberty-perf
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
